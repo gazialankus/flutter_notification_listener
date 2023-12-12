@@ -26,6 +26,8 @@ class NotificationEvent(context: Context, sbn: StatusBarNotification) {
         private const val NOTIFICATION_ID = "id"
         private const val NOTIFICATION_UID = "uid"
         private const val NOTIFICATION_CHANNEL_ID = "channelId"
+        private const val NOTIFICATION_IS_CLEARABLE = "isClearable"
+        private const val NOTIFICATION_PRIORITY = "priority"
         private const val NOTIFICATION_ACTIONS = "actions"
         private const val NOTIFICATION_CAN_TAP = "canTap"
         private const val NOTIFICATION_KEY = "key"
@@ -49,6 +51,9 @@ class NotificationEvent(context: Context, sbn: StatusBarNotification) {
             map[NOTIFICATION_TIMESTAMP] = sbn.postTime
             map[NOTIFICATION_PACKAGE_NAME] =  sbn.packageName
             map[NOTIFICATION_ID] = sbn.id
+
+            map[NOTIFICATION_IS_CLEARABLE] = sbn.isClearable
+            map[NOTIFICATION_PRIORITY] = notify?.priority ?: Notification.PRIORITY_DEFAULT
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 map[NOTIFICATION_UID] = sbn.uid

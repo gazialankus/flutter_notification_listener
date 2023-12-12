@@ -152,6 +152,12 @@ class NotificationEvent {
   /// actions of notification
   List<Action>? actions;
 
+  /// if this notification can be cleared
+  /// means it is not ongoing nor persistent
+  bool? isClearable;
+
+  int? priority;
+
   /// the raw notifaction data from android
   dynamic _data;
 
@@ -171,6 +177,8 @@ class NotificationEvent {
     this.hasLargeIcon,
     this.largeIcon,
     this.canTap,
+    this.isClearable,
+    this.priority,
   });
 
   Map<dynamic, dynamic>? get raw => _data;
@@ -195,6 +203,8 @@ class NotificationEvent {
       hasLargeIcon: map['hasLargeIcon'],
       largeIcon: map['largeIcon'],
       canTap: map["canTap"],
+      isClearable: map["isClearable"],
+      priority: map["priority"],
     );
 
     // set the raw data
