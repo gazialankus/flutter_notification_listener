@@ -5,15 +5,19 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_notification_listener/src/track_info.dart';
 
 import './event.dart';
 
 typedef EventCallbackFunc = void Function(NotificationEvent evt);
+typedef MediaEventCallbackFunc = void Function(TrackInfo trackInfo);
 
 /// NotificationsListener
 class NotificationsListener {
   static const CHANNELID = "flutter_notification_listener";
   static const SEND_PORT_NAME = "notifications_send_port";
+  static const MEDIA_SEND_PORT_NAME = "notifications_media_send_port";
+  static final mediaChannel = EventChannel('$CHANNELID/media');
 
   static const MethodChannel _methodChannel =
       const MethodChannel('$CHANNELID/method');
@@ -50,11 +54,17 @@ class NotificationsListener {
   /// Initialize the plugin and request relevant permissions from the user.
   static Future<void> initialize({
     EventCallbackFunc callbackHandle = _defaultCallbackHandle,
+    MediaEventCallbackFunc mediaCallbackHandle = _mediaDefaultCallbackHandle,
   }) async {
     final CallbackHandle _callbackDispatch =
         PluginUtilities.getCallbackHandle(callbackDispatcher)!;
-    await _methodChannel.invokeMethod(
-        'plugin.initialize', _callbackDispatch.toRawHandle());
+
+    final CallbackHandle _mediaCallbackDispatch =
+        PluginUtilities.getCallbackHandle(callbackDispatcher)!;
+    await _methodChannel.invokeMethod('plugin.initialize', {
+      'callback': _callbackDispatch.toRawHandle(),
+      'mediaCallback': _mediaCallbackDispatch.toRawHandle(),
+    });
 
     // call this call back in the current engine
     // this is important to use ui flutter engine access `service.channel`
@@ -62,15 +72,19 @@ class NotificationsListener {
 
     // register event handler
     // register the default event handler
-    await registerEventHandle(callbackHandle);
+    await registerEventHandle(callbackHandle, mediaCallbackHandle);
   }
 
   /// Register a new event handler
-  static Future<void> registerEventHandle(EventCallbackFunc callback) async {
-    final CallbackHandle _callback =
+  static Future<void> registerEventHandle(EventCallbackFunc callback,
+      MediaEventCallbackFunc mediaEventCallback) async {
+    final _callback =
         PluginUtilities.getCallbackHandle(callback)!;
-    await _methodChannel.invokeMethod(
-        'plugin.registerEventHandle', _callback.toRawHandle());
+    final _mediaCallback = PluginUtilities.getCallbackHandle(mediaEventCallback)!;
+    await _methodChannel.invokeMethod('plugin.registerEventHandle', {
+      'callback': _callback.toRawHandle(),
+      'mediaCallback': _mediaCallback.toRawHandle(),
+    });
   }
 
   /// check the service running or not
@@ -162,6 +176,15 @@ class NotificationsListener {
       print("IsolateNameServer: can not find send $SEND_PORT_NAME");
     _send?.send(evt);
   }
+
+  static void _mediaDefaultCallbackHandle(TrackInfo trackInfo) {
+    final SendPort? _send =
+        IsolateNameServer.lookupPortByName(MEDIA_SEND_PORT_NAME);
+    print("[default callback handler] [send isolate nameserver]");
+    if (_send == null)
+      print("IsolateNameServer: can not find send $MEDIA_SEND_PORT_NAME");
+    _send?.send(trackInfo);
+  }
 }
 
 /// callbackDispatcher use to install background channel
@@ -186,6 +209,21 @@ void callbackDispatcher({inited = true}) {
             }
 
             callback(evt);
+          }
+          break;
+        case 'sink_media_event':
+          {
+            final List<dynamic> args = call.arguments;
+            final trackInfo = TrackInfo.fromJson(jsonDecode(args[1]));
+            final Function? callback = PluginUtilities.getCallbackFromHandle(
+                CallbackHandle.fromRawHandle(args[0]));
+
+            if (callback == null) {
+              print("callback is not register: ${args[0]}");
+              return;
+            }
+
+            callback(trackInfo);
           }
           break;
         default:

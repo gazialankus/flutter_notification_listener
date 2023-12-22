@@ -75,8 +75,10 @@ class FlutterNotificationListenerPlugin : FlutterPlugin, MethodChannel.MethodCal
     const val SHARED_PREFERENCES_KEY = "flutter_notification_cache"
 
     const val CALLBACK_DISPATCHER_HANDLE_KEY = "callback_dispatch_handler"
+    const val MEDIA_CALLBACK_DISPATCHER_HANDLE_KEY = "media_callback_dispatch_handler"
     const val PROMOTE_SERVICE_ARGS_KEY = "promote_service_args"
     const val CALLBACK_HANDLE_KEY = "callback_handler"
+    const val MEDIA_CALLBACK_HANDLE_KEY = "media_callback_handler"
 
     const val FLUTTER_ENGINE_CACHE_KEY = "flutter_engine_main"
 
@@ -89,11 +91,12 @@ class FlutterNotificationListenerPlugin : FlutterPlugin, MethodChannel.MethodCal
       }
     }
 
-    private fun initialize(context: Context, cbId: Long) {
+    private fun initialize(context: Context, cbId: Long, mediaCbId: Long) {
       Log.d(TAG, "plugin init: install callback and notify the service flutter engine changed")
       context.getSharedPreferences(SHARED_PREFERENCES_KEY, Context.MODE_PRIVATE)
         .edit()
         .putLong(CALLBACK_DISPATCHER_HANDLE_KEY, cbId)
+        .putLong(MEDIA_CALLBACK_DISPATCHER_HANDLE_KEY, mediaCbId)
         .apply()
 
       // TODO: update the flutter engine
@@ -163,10 +166,11 @@ class FlutterNotificationListenerPlugin : FlutterPlugin, MethodChannel.MethodCal
       return null
     }
 
-    fun registerEventHandle(context: Context, cbId: Long): Boolean {
+    fun registerEventHandle(context: Context, cbId: Long, mediaCbId: Long): Boolean {
       context.getSharedPreferences(SHARED_PREFERENCES_KEY, Context.MODE_PRIVATE)
         .edit()
         .putLong(CALLBACK_HANDLE_KEY, cbId)
+        .putLong(MEDIA_CALLBACK_HANDLE_KEY, mediaCbId)
         .apply()
       return true
     }
@@ -175,8 +179,9 @@ class FlutterNotificationListenerPlugin : FlutterPlugin, MethodChannel.MethodCal
   override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
     when (call.method) {
       "plugin.initialize" -> {
-        val cbId = call.arguments<Long?>()!!
-        initialize(mContext, cbId)
+        val cbId = call.argument<Long?>("callback")!!
+        val mediaCbId = call.argument<Long?>("mediaCallback")!!
+        initialize(mContext, cbId, mediaCbId)
         return result.success(true)
       }
       "plugin.startService" -> {
@@ -196,8 +201,9 @@ class FlutterNotificationListenerPlugin : FlutterPlugin, MethodChannel.MethodCal
         return result.success(isServiceRunning(mContext, NotificationsHandlerService::class.java))
       }
       "plugin.registerEventHandle" -> {
-        val cbId = call.arguments<Long?>()!!
-        registerEventHandle(mContext, cbId)
+        val cbId = call.argument<Long?>("callback")!!
+        val mediaCbId = call.argument<Long?>("mediaCallback")!!
+        registerEventHandle(mContext, cbId, mediaCbId)
         return result.success(true)
       }
       // TODO: register handle with filter

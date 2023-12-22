@@ -8,17 +8,19 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
-import android.os.Bundle
-import android.os.Handler
-import android.os.PowerManager
+import android.media.AudioManager
+import android.media.MediaMetadata
+import android.media.session.MediaController
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
+import android.media.session.PlaybackState.*
+import android.os.*
 import android.provider.Settings
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.text.TextUtils
 import android.util.Log
 import androidx.annotation.NonNull
-import androidx.annotation.RequiresApi
 import androidx.core.app.NotificationCompat
 import io.flutter.FlutterInjector
 import io.flutter.embedding.engine.FlutterEngine
@@ -30,12 +32,22 @@ import io.flutter.view.FlutterCallbackInformation
 import org.json.JSONObject
 import java.util.*
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.collections.HashMap
+
+
+private const val ACTION_POSTED: String = "posted"
+private const val ACTION_REMOVED: String = "removed"
+private const val STATE_PLAYING = 0
+private const val STATE_PAUSED = 1
+private const val STATE_STOPPED = 2
+private const val STATE_UNKNOWN = -1
 
 class NotificationsHandlerService: MethodChannel.MethodCallHandler, NotificationListenerService() {
     private val queue = ArrayDeque<NotificationEvent>()
     private lateinit var mBackgroundChannel: MethodChannel
     private lateinit var mContext: Context
+
+    private val tokens: HashMap<String, MediaSession.Token> = HashMap()
+    private var trackInfo: TrackInfo = TrackInfo()
 
     // notification event cache: packageName_id -> event
     private val eventsCache = HashMap<String, NotificationEvent>()
@@ -142,11 +154,57 @@ class NotificationsHandlerService: MethodChannel.MethodCallHandler, Notification
         Log.i(TAG, "notification listener service onTaskRemoved")
     }
 
+    private fun findTokenForState(): SbnAndToken? {
+        var playingToken: SbnAndToken? = null
+        var pausedToken: SbnAndToken? = null
+
+        for (sbn in this.activeNotifications) {
+            val token = getTokenIfAvailable(sbn)
+            if (token != null) {
+                val controller = MediaController(this, token)
+                val playbackState: Int = controller.playbackState?.state ?: continue
+                if (playbackState == PlaybackState.STATE_PLAYING) playingToken = SbnAndToken(sbn, token)
+                if (playbackState == PlaybackState.STATE_PAUSED) pausedToken = SbnAndToken(sbn, token)
+            }
+        }
+
+        if (playingToken != null) return playingToken
+        return pausedToken // may also be null
+    }
+
+    private fun getTokenIfAvailable(sbn: StatusBarNotification): MediaSession.Token? {
+        val notif = sbn.notification
+        val bundle: Bundle = notif.extras
+        return bundle.getParcelable<Parcelable>("android.mediaSession") as MediaSession.Token?
+    }
+
+    override fun onNotificationRemoved(sbn: StatusBarNotification?, rankingMap: RankingMap?) {
+        super.onNotificationRemoved(sbn, rankingMap)
+        if (sbn == null) {
+            return
+        }
+
+        FlutterInjector.instance().flutterLoader().startInitialization(mContext)
+        FlutterInjector.instance().flutterLoader().ensureInitializationComplete(mContext, null)
+
+        val token: MediaSession.Token? = tokens.remove(sbn.key)
+        if (token != null) handleMediaNotification(token, ACTION_REMOVED)
+
+    }
+
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         super.onNotificationPosted(sbn)
 
         FlutterInjector.instance().flutterLoader().startInitialization(mContext)
         FlutterInjector.instance().flutterLoader().ensureInitializationComplete(mContext, null)
+
+        val sbnAndToken = findTokenForState()
+//        Log.d(TAG, "Media Token: ${sbnAndToken?.token}")
+        if (sbnAndToken?.token != null) {
+            tokens[sbn.key] = sbnAndToken.token
+            handleMediaNotification(sbnAndToken.token, ACTION_POSTED)
+            return
+        }
 
         val evt = NotificationEvent(mContext, sbn)
 
@@ -162,6 +220,88 @@ class NotificationsHandlerService: MethodChannel.MethodCallHandler, Notification
                 Handler(mContext.mainLooper).post { sendEvent(evt) }
             }
         }
+    }
+
+    private fun handleMediaNotification(token: MediaSession.Token, action: String) {
+        if (action == ACTION_POSTED) {
+            val trackInfo = extractFieldsFor(token) ?: return
+            this.trackInfo = trackInfo
+            sendTrack(trackInfo)
+        } else if (action == ACTION_REMOVED) {
+            finishPlaying(token)
+        }
+    }
+
+    private fun sendTrack(trackInfo: TrackInfo?) {
+        if (trackInfo == null) {
+            sendMediaEvent(TrackInfo())
+            return
+        }
+
+        val audioManager = mContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val volume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        trackInfo.volumePercent = volume * 100 / maxVolume
+
+        sendMediaEvent(trackInfo)
+    }
+
+    private fun finishPlaying(token: MediaSession.Token) {
+        val controller = MediaController(mContext, token)
+        val mediaMetadata = controller.metadata ?: return
+        val id = deriveId(mediaMetadata)
+        if (id == trackInfo.id) sendTrack(null)
+    }
+
+    private fun extractFieldsFor(token: MediaSession.Token): TrackInfo? {
+        val controller = MediaController(mContext, token)
+
+        val mediaMetadata = controller.metadata ?: return null
+
+        val id: String = deriveId(mediaMetadata)
+        val lastId = trackInfo.id
+
+        val playbackState = controller.playbackState
+            ?: // if we don't have a playback state, we can't do anything
+            return null
+        val state: Int = getPlaybackState(playbackState)
+
+        // back out now if we're not interested in this state
+        if (state == STATE_UNKNOWN) {
+            this.trackInfo.clear()
+            return null
+        }
+        if (state == STATE_PAUSED && lastId != null && id != lastId) return null
+        if (state == STATE_STOPPED && id != lastId) return null
+
+        val trackInfo = TrackInfo()
+        trackInfo.id = id
+        trackInfo.source = controller.packageName
+        trackInfo.state = state
+        trackInfo.album = mediaMetadata.getString(MediaMetadata.METADATA_KEY_ALBUM)
+        trackInfo.title = mediaMetadata.getString(MediaMetadata.METADATA_KEY_TITLE)
+        trackInfo.artist = mediaMetadata.getString(MediaMetadata.METADATA_KEY_ARTIST)
+        trackInfo.genre = mediaMetadata.getString(MediaMetadata.METADATA_KEY_GENRE)
+        trackInfo.duration = mediaMetadata.getLong(MediaMetadata.METADATA_KEY_DURATION)
+        trackInfo.position = playbackState.position
+
+        return trackInfo
+    }
+
+    private fun getPlaybackState(state: PlaybackState): Int {
+        return when (state.state) {
+            PlaybackState.STATE_PLAYING -> STATE_PLAYING
+            PlaybackState.STATE_PAUSED -> STATE_PAUSED
+            PlaybackState.STATE_STOPPED -> STATE_STOPPED
+            else -> STATE_UNKNOWN
+        }
+    }
+
+    private fun deriveId(mediaMetadata: MediaMetadata): String {
+        val album = mediaMetadata.getString(MediaMetadata.METADATA_KEY_ALBUM)
+        val title = mediaMetadata.getString(MediaMetadata.METADATA_KEY_TITLE)
+        val artist = mediaMetadata.getString(MediaMetadata.METADATA_KEY_ARTIST)
+        return "$title:$artist:$album"
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?) {
@@ -326,6 +466,7 @@ class NotificationsHandlerService: MethodChannel.MethodCallHandler, Notification
     companion object {
 
         var callbackHandle = 0L
+        var mediaCallbackHandle = 1L
 
         @SuppressLint("StaticFieldLeak")
         @JvmStatic
@@ -415,6 +556,9 @@ class NotificationsHandlerService: MethodChannel.MethodCallHandler, Notification
         val cb = context.getSharedPreferences(FlutterNotificationListenerPlugin.SHARED_PREFERENCES_KEY, Context.MODE_PRIVATE)
             .getLong(FlutterNotificationListenerPlugin.CALLBACK_DISPATCHER_HANDLE_KEY, 0)
 
+        val mediaCb = context.getSharedPreferences(FlutterNotificationListenerPlugin.SHARED_PREFERENCES_KEY, Context.MODE_PRIVATE)
+            .getLong(FlutterNotificationListenerPlugin.MEDIA_CALLBACK_DISPATCHER_HANDLE_KEY, 0)
+
         if (cb != 0L) {
             Log.d(TAG, "try to find callback: $cb")
             val info = FlutterCallbackInformation.lookupCallbackInformation(cb)
@@ -424,6 +568,17 @@ class NotificationsHandlerService: MethodChannel.MethodCallHandler, Notification
             eng.dartExecutor.executeDartCallback(args)
         } else {
             Log.e(TAG, "Fatal: no callback register")
+        }
+
+        if (mediaCb != 1L) {
+            Log.d(TAG, "try to find media callback: $mediaCb")
+            val info = FlutterCallbackInformation.lookupCallbackInformation(mediaCb)
+            val args = DartExecutor.DartCallback(context.assets,
+                FlutterInjector.instance().flutterLoader().findAppBundlePath(), info)
+            // call the callback
+            eng.dartExecutor.executeDartCallback(args)
+        } else {
+            Log.e(TAG, "Fatal: no media callback register")
         }
 
         FlutterEngineCache.getInstance().put(FlutterNotificationListenerPlugin.FLUTTER_ENGINE_CACHE_KEY, eng)
@@ -457,22 +612,74 @@ class NotificationsHandlerService: MethodChannel.MethodCallHandler, Notification
         Log.d(TAG, "service start finished")
     }
 
+    private fun sendMediaEvent(trackInfo: TrackInfo) {
+        Log.d(TAG, "send media event: ${trackInfo.toJson()}")
+        if (mediaCallbackHandle == 1L) {
+            mediaCallbackHandle = mContext.getSharedPreferences(FlutterNotificationListenerPlugin.SHARED_PREFERENCES_KEY, Context.MODE_PRIVATE)
+                    .getLong(FlutterNotificationListenerPlugin.MEDIA_CALLBACK_HANDLE_KEY, 0)
+        }
+
+        try {
+            mBackgroundChannel.invokeMethod("sink_media_event", listOf(mediaCallbackHandle, trackInfo.toJson()))
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     private fun sendEvent(evt: NotificationEvent) {
         Log.d(TAG, "send notification event: ${evt.data}")
         if (callbackHandle == 0L) {
             callbackHandle = mContext.getSharedPreferences(FlutterNotificationListenerPlugin.SHARED_PREFERENCES_KEY, Context.MODE_PRIVATE)
                 .getLong(FlutterNotificationListenerPlugin.CALLBACK_HANDLE_KEY, 0)
         }
-
         // why mBackgroundChannel can be null?
 
         try {
-            // don't care about the method name
             mBackgroundChannel.invokeMethod("sink_event", listOf(callbackHandle, evt.data))
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
+    private class SbnAndToken(val sbn: StatusBarNotification, val token: MediaSession.Token)
+
+    private data class TrackInfo(
+        var id: String? = null,
+        var source: String? = null,
+        var state: Int? = null,
+        var album: String? = null,
+        var title: String? = null,
+        var artist: String? = null,
+        var genre: String? = null,
+        var duration: Long? = null,
+        var position: Long? = null,
+        var volumePercent: Int? = null,
+    ) {
+        fun toJson(): String {
+            val json = JSONObject()
+            json.put("id", id)
+            json.put("source", source)
+            json.put("state", state)
+            json.put("album", album)
+            json.put("title", title)
+            json.put("artist", artist)
+            json.put("genre", genre)
+            json.put("duration", duration)
+            json.put("position", position)
+            json.put("volumePercent", volumePercent)
+            return json.toString()
+        }
+        fun clear() {
+            id = null
+            source = null
+            state = null
+            album = null
+            title = null
+            artist = null
+            genre = null
+            duration = null
+            position = null
+        }
+    }
 }
 
