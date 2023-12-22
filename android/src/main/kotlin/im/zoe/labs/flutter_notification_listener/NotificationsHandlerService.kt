@@ -154,22 +154,16 @@ class NotificationsHandlerService: MethodChannel.MethodCallHandler, Notification
         Log.i(TAG, "notification listener service onTaskRemoved")
     }
 
-    private fun findTokenForState(): SbnAndToken? {
+    private fun findTokenForSbn(sbn: StatusBarNotification): SbnAndToken? {
         var playingToken: SbnAndToken? = null
         var pausedToken: SbnAndToken? = null
 
-        for (sbn in this.activeNotifications) {
-            val token = getTokenIfAvailable(sbn)
-            if (token != null) {
-                val controller = MediaController(this, token)
-                val playbackState: Int = controller.playbackState?.state ?: continue
-                if (playbackState == PlaybackState.STATE_PLAYING) playingToken = SbnAndToken(sbn, token)
-                if (playbackState == PlaybackState.STATE_PAUSED) pausedToken = SbnAndToken(sbn, token)
-            }
-        }
-
-        if (playingToken != null) return playingToken
-        return pausedToken // may also be null
+        val token = getTokenIfAvailable(sbn) ?: return null
+        val controller = MediaController(this, token)
+        val playbackState: Int = controller.playbackState?.state ?: return null
+        if (playbackState == PlaybackState.STATE_PLAYING) return SbnAndToken(sbn, token)
+        if (playbackState == PlaybackState.STATE_PAUSED) return SbnAndToken(sbn, token)
+        return null
     }
 
     private fun getTokenIfAvailable(sbn: StatusBarNotification): MediaSession.Token? {
@@ -198,12 +192,14 @@ class NotificationsHandlerService: MethodChannel.MethodCallHandler, Notification
         FlutterInjector.instance().flutterLoader().startInitialization(mContext)
         FlutterInjector.instance().flutterLoader().ensureInitializationComplete(mContext, null)
 
-        val sbnAndToken = findTokenForState()
+        val sbnAndToken = findTokenForSbn(sbn)
 //        Log.d(TAG, "Media Token: ${sbnAndToken?.token}")
         if (sbnAndToken?.token != null) {
             tokens[sbn.key] = sbnAndToken.token
-            handleMediaNotification(sbnAndToken.token, ACTION_POSTED)
-            return
+            val isHandled = handleMediaNotification(sbnAndToken.token, ACTION_POSTED)
+            if (isHandled) {
+                return
+            }
         }
 
         val evt = NotificationEvent(mContext, sbn)
@@ -222,14 +218,15 @@ class NotificationsHandlerService: MethodChannel.MethodCallHandler, Notification
         }
     }
 
-    private fun handleMediaNotification(token: MediaSession.Token, action: String) {
+    private fun handleMediaNotification(token: MediaSession.Token, action: String): Boolean {
         if (action == ACTION_POSTED) {
-            val trackInfo = extractFieldsFor(token) ?: return
+            val trackInfo = extractFieldsFor(token) ?: return false
             this.trackInfo = trackInfo
             sendTrack(trackInfo)
         } else if (action == ACTION_REMOVED) {
             finishPlaying(token)
         }
+        return true
     }
 
     private fun sendTrack(trackInfo: TrackInfo?) {
