@@ -32,6 +32,8 @@ class NotificationEvent(context: Context, sbn: StatusBarNotification) {
         private const val NOTIFICATION_CAN_TAP = "canTap"
         private const val NOTIFICATION_KEY = "key"
         private const val NOTIFICATION_UNIQUE_ID = "_id"
+        private const val NOTIFICATION_FLAGS = "flags"
+        private const val NOTIFICATION_IS_GROUP = "isGroup"
 
         fun genKey(vararg items: Any?): String {
             return Utils.md5(items.joinToString(separator="-"){ "$it" }).slice(IntRange(0, 12))
@@ -54,6 +56,9 @@ class NotificationEvent(context: Context, sbn: StatusBarNotification) {
 
             map[NOTIFICATION_IS_CLEARABLE] = sbn.isClearable
             map[NOTIFICATION_PRIORITY] = notify?.priority ?: Notification.PRIORITY_DEFAULT
+
+            map[NOTIFICATION_FLAGS] = notify.flags
+            map[NOTIFICATION_IS_GROUP] = (notify.flags and Notification.FLAG_GROUP_SUMMARY) != 0
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 map[NOTIFICATION_UID] = sbn.uid
