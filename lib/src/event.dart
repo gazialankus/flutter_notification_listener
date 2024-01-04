@@ -158,6 +158,10 @@ class NotificationEvent {
 
   int? priority;
 
+  int? flags;
+
+  bool? isGroup;
+
   /// the raw notifaction data from android
   dynamic _data;
 
@@ -179,6 +183,8 @@ class NotificationEvent {
     this.canTap,
     this.isClearable,
     this.priority,
+    this.flags,
+    this.isGroup,
   });
 
   Map<dynamic, dynamic>? get raw => _data;
@@ -205,6 +211,8 @@ class NotificationEvent {
       canTap: map["canTap"],
       isClearable: map["isClearable"],
       priority: map["priority"],
+      flags: map["flags"],
+      isGroup: map["isGroup"],
     );
 
     // set the raw data
