@@ -49,19 +49,24 @@ class FlutterNotificationListenerPlugin : FlutterPlugin, MethodChannel.MethodCal
 
   override fun onDetachedFromEngine(@NonNull binding: FlutterPlugin.FlutterPluginBinding) {
     // methodChannel.setMethodCallHandler(null)
+    Log.i(TAG, "detached from engine")
   }
 
   @RequiresApi(api = Build.VERSION_CODES.JELLY_BEAN_MR2)
   override fun onListen(o: Any?, eventSink: EventChannel.EventSink?) {
+    Log.i(TAG, "onListen")
     this.eventSink = eventSink
   }
 
   override fun onCancel(o: Any?) {
+    Log.i(TAG, "onCancel")
     eventSink = null
   }
 
   internal inner class NotificationReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
+      Log.i(TAG, "onReceive. has eventSink? ${eventSink != null}")
+
       eventSink?.success(intent.getStringExtra(NotificationsHandlerService.NOTIFICATION_INTENT_KEY)?:"{}")
     }
   }
@@ -92,7 +97,8 @@ class FlutterNotificationListenerPlugin : FlutterPlugin, MethodChannel.MethodCal
     }
 
     private fun initialize(context: Context, cbId: Long, mediaCbId: Long) {
-      Log.d(TAG, "plugin init: install callback and notify the service flutter engine changed")
+      Log.d(TAG, "plugin init: install callback and notify the service flutter engine changed $cbId $mediaCbId")
+
       context.getSharedPreferences(SHARED_PREFERENCES_KEY, Context.MODE_PRIVATE)
         .edit()
         .putLong(CALLBACK_DISPATCHER_HANDLE_KEY, cbId)
@@ -129,8 +135,11 @@ class FlutterNotificationListenerPlugin : FlutterPlugin, MethodChannel.MethodCal
         }
 
         // and try to toggle the service to trigger rebind
+        Log.i(TAG, "will disableServiceSettings")
         disableServiceSettings(context)
+        Log.i(TAG, "will enableServiceSettings")
         enableServiceSettings(context)
+        Log.i(TAG, "done enableServiceSettings")
       }
 
       return true
@@ -138,40 +147,59 @@ class FlutterNotificationListenerPlugin : FlutterPlugin, MethodChannel.MethodCal
 
     fun startService(context: Context, cfg: Utils.PromoteServiceConfig): Boolean {
       // store the config
+      Log.i(TAG, "startService")
       cfg.save(context)
+      Log.i(TAG, "saved")
       return internalStartService(context, cfg)
     }
 
     fun stopService(context: Context): Boolean {
-      if (!isServiceRunning(context, NotificationsHandlerService::class.java)) return true
+      Log.i(TAG, "stopService")
+      if (!isServiceRunning(context, NotificationsHandlerService::class.java)) {
+        Log.i(TAG, "service wasn't running, returning true.")
+        return true
+      }
 
+      Log.i(TAG, "will shutdown with intent.")
       val intent = Intent(context, NotificationsHandlerService::class.java)
       intent.action = NotificationsHandlerService.ACTION_SHUTDOWN
+      Log.i(TAG, "starting the intent.")
       context.startService(intent)
+      Log.i(TAG, "started the intent.")
       return true
     }
 
     fun isServiceRunning(context: Context, serviceClass: Class<*>): Boolean {
-      return null != getRunningService(context, serviceClass)
+      Log.i(TAG, "is service running?")
+      val r = null != getRunningService(context, serviceClass)
+      Log.i(TAG, "running? $r")
+      return r
     }
 
     private fun getRunningService(context: Context, serviceClass: Class<*>): ActivityManager.RunningServiceInfo? {
+      Log.i(TAG, "getRunningService")
       val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager?
+      Log.i(TAG, "manager is not null? ${manager != null}")
       for (service in manager!!.getRunningServices(Int.MAX_VALUE)) {
         if (serviceClass.name == service.service.className) {
+          Log.i(TAG, "found ${service.service.className}")
           return service
         }
       }
+      Log.i(TAG, "Could not find")
 
       return null
     }
 
     fun registerEventHandle(context: Context, cbId: Long, mediaCbId: Long): Boolean {
+      Log.i(TAG, "registerEventHandle $cbId $mediaCbId")
+
       context.getSharedPreferences(SHARED_PREFERENCES_KEY, Context.MODE_PRIVATE)
         .edit()
         .putLong(CALLBACK_HANDLE_KEY, cbId)
         .putLong(MEDIA_CALLBACK_HANDLE_KEY, mediaCbId)
         .apply()
+      Log.i(TAG, "registerEventHandle done")
       return true
     }
   }

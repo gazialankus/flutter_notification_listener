@@ -110,6 +110,8 @@ class NotificationsHandlerService: MethodChannel.MethodCallHandler, Notification
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // if get shutdown release the wake lock
+        Log.d(TAG, "onStartCommand. ${intent?.action}'")
+
         when (intent?.action) {
             ACTION_SHUTDOWN -> {
                 (getSystemService(Context.POWER_SERVICE) as PowerManager).run {
@@ -155,26 +157,35 @@ class NotificationsHandlerService: MethodChannel.MethodCallHandler, Notification
     }
 
     private fun findTokenForSbn(sbn: StatusBarNotification): SbnAndToken? {
+        Log.d(TAG, "findTokenForSbn")
+
         var playingToken: SbnAndToken? = null
         var pausedToken: SbnAndToken? = null
 
         val token = getTokenIfAvailable(sbn) ?: return null
+        Log.d(TAG, "findTokenForSbn 1")
         val controller = MediaController(this, token)
         val playbackState: Int = controller.playbackState?.state ?: return null
+        Log.d(TAG, "findTokenForSbn 2")
         if (playbackState == PlaybackState.STATE_PLAYING) return SbnAndToken(sbn, token)
+        Log.d(TAG, "findTokenForSbn 3")
         if (playbackState == PlaybackState.STATE_PAUSED) return SbnAndToken(sbn, token)
+        Log.d(TAG, "findTokenForSbn null")
         return null
     }
 
     private fun getTokenIfAvailable(sbn: StatusBarNotification): MediaSession.Token? {
+        Log.d(TAG, "getTokenIfAvailable")
         val notif = sbn.notification
         val bundle: Bundle = notif.extras
         return bundle.getParcelable<Parcelable>("android.mediaSession") as MediaSession.Token?
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification?, rankingMap: RankingMap?) {
+        Log.d(TAG, "onNotificationRemoved")
         super.onNotificationRemoved(sbn, rankingMap)
         if (sbn == null) {
+            Log.d(TAG, "no sbn")
             return
         }
 
@@ -189,15 +200,20 @@ class NotificationsHandlerService: MethodChannel.MethodCallHandler, Notification
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         super.onNotificationPosted(sbn)
 
+        Log.d(TAG, "onNotificationPosted")
+
         FlutterInjector.instance().flutterLoader().startInitialization(mContext)
         FlutterInjector.instance().flutterLoader().ensureInitializationComplete(mContext, null)
 
+        Log.d(TAG, "Started and ensured")
+
         val sbnAndToken = findTokenForSbn(sbn)
-//        Log.d(TAG, "Media Token: ${sbnAndToken?.token}")
+        Log.d(TAG, "Media Token: ${sbnAndToken?.token}")
         if (sbnAndToken?.token != null) {
             tokens[sbn.key] = sbnAndToken.token
             val isHandled = handleMediaNotification(sbnAndToken.token, ACTION_POSTED)
             if (isHandled) {
+                Log.d(TAG, " sbnAndToken.token is handled")
                 return
             }
         }
@@ -311,7 +327,7 @@ class NotificationsHandlerService: MethodChannel.MethodCallHandler, Notification
     }
 
     private fun initFinish() {
-        Log.d(TAG, "service's flutter engine initialize finished")
+        Log.d(TAG, "service's flutter engine initialize finished. sServiceStarted? $sServiceStarted")
         synchronized(sServiceStarted) {
             while (!queue.isEmpty()) sendEvent(queue.remove())
             sServiceStarted.set(true)
@@ -494,6 +510,7 @@ class NotificationsHandlerService: MethodChannel.MethodCallHandler, Notification
         const val NOTIFICATION_INTENT = "notification_event"
 
         fun permissionGiven(context: Context): Boolean {
+            Log.i(TAG, "permissionGiven?")
             val packageName = context.packageName
             val flat = Settings.Secure.getString(context.contentResolver, ENABLED_NOTIFICATION_LISTENERS)
             if (!TextUtils.isEmpty(flat)) {
@@ -502,35 +519,43 @@ class NotificationsHandlerService: MethodChannel.MethodCallHandler, Notification
                     val componentName = ComponentName.unflattenFromString(name)
                     val nameMatch = TextUtils.equals(packageName, componentName?.packageName)
                     if (nameMatch) {
+                        Log.i(TAG, "permissionGiven, yes!")
                         return true
                     }
                 }
             }
 
+            Log.i(TAG, "permissionGiven, no!")
             return false
         }
 
         fun openPermissionSettings(context: Context): Boolean {
+            Log.i(TAG, "openPermissionSettings")
             context.startActivity(Intent(ACTION_NOTIFICATION_LISTENER_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             return true
         }
 
         fun enableServiceSettings(context: Context) {
+            Log.i(TAG, "enableServiceSettings")
             toggleServiceSettings(context, PackageManager.COMPONENT_ENABLED_STATE_ENABLED)
         }
 
         fun disableServiceSettings(context: Context) {
+            Log.i(TAG, "disableServiceSettings")
             toggleServiceSettings(context, PackageManager.COMPONENT_ENABLED_STATE_DISABLED)
         }
 
         private fun toggleServiceSettings(context: Context, state: Int) {
+            Log.i(TAG, "toggleServiceSettings")
             val receiver = ComponentName(context, NotificationsHandlerService::class.java)
             val pm = context.packageManager
             pm.setComponentEnabledSetting(receiver, state, PackageManager.DONT_KILL_APP)
+            Log.i(TAG, "toggleServiceSettings done")
         }
 
         fun updateFlutterEngine(context: Context) {
-            Log.d(TAG, "call instance update flutter engine from plugin init")
+            Log.d(TAG, "call instance update flutter engine from plugin init. has instance? ${instance != null}")
+
             instance?.updateFlutterEngine(context)
             // we need to `finish init` manually
             instance?.initFinish()
@@ -629,7 +654,9 @@ class NotificationsHandlerService: MethodChannel.MethodCallHandler, Notification
             callbackHandle = mContext.getSharedPreferences(FlutterNotificationListenerPlugin.SHARED_PREFERENCES_KEY, Context.MODE_PRIVATE)
                 .getLong(FlutterNotificationListenerPlugin.CALLBACK_HANDLE_KEY, 0)
         }
+
         // why mBackgroundChannel can be null?
+        Log.d(TAG, "$mBackgroundChannel")
 
         try {
             mBackgroundChannel.invokeMethod("sink_event", listOf(callbackHandle, evt.data))
